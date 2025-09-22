@@ -1,0 +1,148 @@
+--Q1total revenue
+SELECT SUM(COALESCE("Total Amount", Quantity * "Price per Unit")) AS total_revenue
+FROM retail_df;
+
+-- Q2 total orders, total customers
+SELECT COUNT(DISTINCT "Transaction ID") AS total_orders,
+       COUNT(DISTINCT "Customer ID") AS total_customers
+FROM retail_df;
+
+-- Q3 monthly revenue
+SELECT DATE_TRUNC('month', Date) AS month,
+       SUM(COALESCE("Total Amount", Quantity * "Price per Unit")) AS revenue
+FROM retail_df
+GROUP BY month
+ORDER BY month;
+
+-- Q4: daily revenue
+SELECT CAST(Date AS DATE) AS day,
+       SUM(COALESCE("Total Amount", Quantity * "Price per Unit")) AS revenue
+FROM retail_df
+GROUP BY day
+ORDER BY day;
+
+-- Q5: revenue by product category (top 20)
+SELECT "Product Category",
+       SUM(COALESCE("Total Amount", Quantity * "Price per Unit")) AS revenue,
+       SUM(Quantity) AS units_sold
+FROM retail_df
+GROUP BY "Product Category"
+ORDER BY revenue DESC
+LIMIT 20;
+
+-- Q6: revenue by gender
+SELECT Gender,
+       SUM(COALESCE("Total Amount", Quantity * "Price per Unit")) AS revenue,
+       COUNT(DISTINCT "Customer ID") AS unique_customers
+FROM retail_df
+GROUP BY Gender
+ORDER BY revenue DESC;
+
+-- Q7: revenue by Age groups
+SELECT
+  CASE
+    WHEN Age < 25 THEN '<25'
+    WHEN Age BETWEEN 25 AND 34 THEN '25-34'
+    WHEN Age BETWEEN 35 AND 44 THEN '35-44'
+    WHEN Age BETWEEN 45 AND 54 THEN '45-54'
+    ELSE '55+' END AS Age_group,
+  SUM(COALESCE("Total Amount", Quantity * "Price per Unit")) AS revenue,
+  COUNT(DISTINCT "Customer ID") AS customers
+FROM retail_df
+GROUP BY 
+  CASE
+    WHEN Age < 25 THEN '<25'
+    WHEN Age BETWEEN 25 AND 34 THEN '25-34'
+    WHEN Age BETWEEN 35 AND 44 THEN '35-44'
+    WHEN Age BETWEEN 45 AND 54 THEN '45-54'
+    ELSE '55+' END
+ORDER BY revenue DESC;
+
+-- Q8: Average Order Value (AOV) by month
+SELECT DATE_TRUNC('month', Date) AS month,
+       SUM(COALESCE("Total Amount", Quantity * "Price per Unit")) / COUNT(DISTINCT "Transaction ID") AS aov
+FROM retail_df
+GROUP BY month
+ORDER BY month;
+
+-- Q9: repeat customer count and percent
+WITH cust_counts AS (
+  SELECT "Customer ID", COUNT(DISTINCT "Transaction ID") AS orders
+  FROM retail_df
+  GROUP BY "Customer ID"
+)
+SELECT
+  SUM(CASE WHEN orders = 1 THEN 1 ELSE 0 END) AS customers_one_order,
+  SUM(CASE WHEN orders > 1 THEN 1 ELSE 0 END) AS repeat_customers,
+  COUNT(*) AS total_customers,
+  ROUND(100.0 * SUM(CASE WHEN orders > 1 THEN 1 ELSE 0 END) / COUNT(*), 2) AS repeat_pct
+FROM cust_counts;
+
+-- Q10: cohort analysis (cohort month = first purchase month)
+WITH orders AS (
+  SELECT
+    "Customer ID",
+    DATE_TRUNC('month', Date) AS order_month,
+    "Transaction ID",
+    SUM(COALESCE("Total Amount", Quantity * "Price per Unit")) AS order_revenue
+  FROM retail_df
+  GROUP BY 1,2,3
+),
+first_order AS (
+  SELECT "Customer ID", MIN(order_month) AS cohort_month
+  FROM orders
+  GROUP BY "Customer ID"
+),
+cohort_activity AS (
+  SELECT f.cohort_month,
+         o.order_month,
+         COUNT(DISTINCT o."Customer ID") AS customers,
+         SUM(o.order_revenue) AS revenue
+  FROM orders o
+  JOIN first_order f USING ("Customer ID")
+  GROUP BY f.cohort_month, o.order_month
+),
+cohort_size AS (
+  SELECT cohort_month, COUNT(DISTINCT "Customer ID") AS cohort_customers
+  FROM first_order
+  GROUP BY cohort_month
+)
+SELECT
+  ca.cohort_month,
+  ca.order_month,
+  DATEDIFF('month', ca.cohort_month, ca.order_month) AS months_since_cohort,
+  ca.customers,
+  cs.cohort_customers,
+  ROUND(100.0 * ca.customers / cs.cohort_customers,2) AS retention_pct,
+  ca.revenue
+FROM cohort_activity ca
+JOIN cohort_size cs ON ca.cohort_month = cs.cohort_month
+ORDER BY ca.cohort_month, ca.order_month;
+
+-- Q11: Top N customers by total spend
+SELECT "Customer ID",
+       SUM(COALESCE("Total Amount", Quantity * "Price per Unit")) AS total_spend,
+       COUNT(DISTINCT "Transaction ID") as orders
+FROM retail_df
+GROUP BY "Customer ID"
+ORDER BY total_spend DESC
+LIMIT 20;
+
+-- Q12: RFM basic (recency, freq, monetary)
+WITH cust AS (
+  SELECT "Customer ID",
+         MAX(CAST(Date AS DATE)) AS last_purchase,
+         COUNT(DISTINCT "Transaction ID") AS frequency,
+         SUM(COALESCE("Total Amount", Quantity * "Price per Unit")) AS monetary
+  FROM retail_df
+  GROUP BY "Customer ID"
+),
+max_Date AS (SELECT MAX(CAST(Date AS DATE)) AS maxd FROM retail_df)
+SELECT
+  c."Customer ID",
+  DATEDIFF('day', c.last_purchase, m.maxd) AS recency_days,
+  c.frequency,
+  c.monetary
+FROM cust c CROSS JOIN max_Date m
+ORDER BY monetary DESC
+LIMIT 50;
